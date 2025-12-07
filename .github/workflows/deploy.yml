@@ -1,0 +1,641 @@
+# ================================================
+# GITHUB ACTIONS CI/CD PIPELINE
+# ================================================
+# Pipeline para aplicación de microservicios
+# Arquitectura: API, Web, DB, Notifications, Nginx
+# Registry: Azure Container Registry (ACR)
+# ================================================
+
+name: CI/CD Pipeline - Azure Deploy
+
+# -------------------- TRIGGERS --------------------
+on:
+  push:
+    branches:
+      - main                              # Trigger automático en push a main
+  workflow_dispatch:                      # Permite ejecución manual desde GitHub UI
+
+# -------------------- VARIABLES --------------------
+env:
+  # Azure Container Registry
+  REGISTRY_URL: miproyectoacr.azurecr.io  # URL del Azure Container Registry
+  REGISTRY_USER: ${{ secrets.ACR_USERNAME }}     # Usuario ACR (configurar en GitHub Secrets)
+  REGISTRY_PASSWORD: ${{ secrets.ACR_PASSWORD }} # Password ACR (configurar en GitHub Secrets)
+  
+  # Servidor de producción
+  DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}        # IP del servidor (ej: 172.16.9.31)
+  DEPLOY_USER: ${{ secrets.DEPLOY_USER }}        # Usuario SSH (ej: docker-alumnos01)
+  DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}  # Clave privada SSH
+  
+  # Nombres de imágenes Docker (ACR)
+  API_IMAGE: miproyectoacr.azurecr.io/todos-api
+  WEB_IMAGE: miproyectoacr.azurecr.io/todos-web
+  DB_IMAGE: miproyectoacr.azurecr.io/todos-db
+  NOTIFICATIONS_IMAGE: miproyectoacr.azurecr.io/todos-notifications
+  NGINX_IMAGE: miproyectoacr.azurecr.io/todos-nginx
+  
+  # Tag de versión (SHA corto del commit)
+  IMAGE_TAG: ${{ github.sha }}
+  
+  # Variables de configuración
+  DOCKER_NETWORK: app-network
+  PATH_SERVER_USR: devops-tp
+  
+  # Variables de aplicación (no sensibles)
+  MYSQL_DATABASE: todos_db
+  MYSQL_USER: todos_user
+  SMTP_SERVER: smtp.gmail.com
+  SMTP_PORT: "587"
+  EMAIL_FROM: noreply@todos.com
+
+# -------------------- JOBS --------------------
+jobs:
+  
+  # ========================================
+  # JOB 1: BUILD & PUSH - API
+  # ========================================
+  build-api:
+    name: 🔨 Build API Image
+    runs-on: ubuntu-latest
+    # Solo ejecutar si hubo cambios en api/ o docker-compose.yml
+    if: |
+      contains(github.event.head_commit.modified, 'api/') || 
+      contains(github.event.head_commit.added, 'api/') ||
+      contains(github.event.head_commit.modified, 'docker-compose.yml') ||
+      github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: 📥 Checkout código
+        uses: actions/checkout@v4
+      
+      # Login a Azure Container Registry
+      - name: 🔐 Login to Azure Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY_URL }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+      
+      # Configurar Docker Buildx para builds eficientes
+      - name: 🛠️ Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      # Build y push de imagen API
+      - name: 🐳 Build and Push API Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./api                  # Contexto de build (carpeta api/)
+          file: ./api/Dockerfile          # Dockerfile a usar
+          push: true                      # Push automático a registry
+          tags: |
+            ${{ env.API_IMAGE }}:${{ github.sha }}
+            ${{ env.API_IMAGE }}:latest
+          cache-from: type=registry,ref=${{ env.API_IMAGE }}:latest  # Cache desde latest
+          cache-to: type=inline           # Guardar cache en la imagen
+      
+      - name: ✅ API Image Built Successfully
+        run: |
+          echo "✓ API image built and pushed:"
+          echo "  - ${{ env.API_IMAGE }}:${{ github.sha }}"
+          echo "  - ${{ env.API_IMAGE }}:latest"
+
+  # ========================================
+  # JOB 2: BUILD & PUSH - WEB
+  # ========================================
+  build-web:
+    name: 🔨 Build Web Image
+    runs-on: ubuntu-latest
+    if: |
+      contains(github.event.head_commit.modified, 'web/') || 
+      contains(github.event.head_commit.added, 'web/') ||
+      contains(github.event.head_commit.modified, 'docker-compose.yml') ||
+      github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: 📥 Checkout código
+        uses: actions/checkout@v4
+      
+      - name: 🔐 Login to Azure Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY_URL }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+      
+      - name: 🛠️ Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: 🐳 Build and Push Web Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./web
+          file: ./web/Dockerfile
+          push: true
+          tags: |
+            ${{ env.WEB_IMAGE }}:${{ github.sha }}
+            ${{ env.WEB_IMAGE }}:latest
+          cache-from: type=registry,ref=${{ env.WEB_IMAGE }}:latest
+          cache-to: type=inline
+      
+      - name: ✅ Web Image Built Successfully
+        run: |
+          echo "✓ Web image built and pushed:"
+          echo "  - ${{ env.WEB_IMAGE }}:${{ github.sha }}"
+          echo "  - ${{ env.WEB_IMAGE }}:latest"
+
+  # ========================================
+  # JOB 3: BUILD & PUSH - DB
+  # ========================================
+  build-db:
+    name: 🔨 Build Database Image
+    runs-on: ubuntu-latest
+    if: |
+      contains(github.event.head_commit.modified, 'db/') || 
+      contains(github.event.head_commit.added, 'db/') ||
+      contains(github.event.head_commit.modified, 'docker-compose.yml') ||
+      github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: 📥 Checkout código
+        uses: actions/checkout@v4
+      
+      - name: 🔐 Login to Azure Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY_URL }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+      
+      - name: 🛠️ Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: 🐳 Build and Push DB Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./db
+          file: ./db/Dockerfile
+          push: true
+          tags: |
+            ${{ env.DB_IMAGE }}:${{ github.sha }}
+            ${{ env.DB_IMAGE }}:latest
+          cache-from: type=registry,ref=${{ env.DB_IMAGE }}:latest
+          cache-to: type=inline
+      
+      - name: ✅ DB Image Built Successfully
+        run: |
+          echo "✓ DB image built and pushed:"
+          echo "  - ${{ env.DB_IMAGE }}:${{ github.sha }}"
+          echo "  - ${{ env.DB_IMAGE }}:latest"
+
+  # ========================================
+  # JOB 4: BUILD & PUSH - NOTIFICATIONS
+  # ========================================
+  build-notifications:
+    name: 🔨 Build Notifications Image
+    runs-on: ubuntu-latest
+    if: |
+      contains(github.event.head_commit.modified, 'notifications/') || 
+      contains(github.event.head_commit.added, 'notifications/') ||
+      contains(github.event.head_commit.modified, 'docker-compose.yml') ||
+      github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: 📥 Checkout código
+        uses: actions/checkout@v4
+      
+      - name: 🔐 Login to Azure Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY_URL }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+      
+      - name: 🛠️ Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: 🐳 Build and Push Notifications Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./notifications
+          file: ./notifications/Dockerfile
+          push: true
+          tags: |
+            ${{ env.NOTIFICATIONS_IMAGE }}:${{ github.sha }}
+            ${{ env.NOTIFICATIONS_IMAGE }}:latest
+          cache-from: type=registry,ref=${{ env.NOTIFICATIONS_IMAGE }}:latest
+          cache-to: type=inline
+      
+      - name: ✅ Notifications Image Built Successfully
+        run: |
+          echo "✓ Notifications image built and pushed:"
+          echo "  - ${{ env.NOTIFICATIONS_IMAGE }}:${{ github.sha }}"
+          echo "  - ${{ env.NOTIFICATIONS_IMAGE }}:latest"
+
+  # ========================================
+  # JOB 5: BUILD & PUSH - NGINX
+  # ========================================
+  build-nginx:
+    name: 🔨 Build Nginx Image
+    runs-on: ubuntu-latest
+    # Nginx siempre se builda (es el gateway)
+    
+    steps:
+      - name: 📥 Checkout código
+        uses: actions/checkout@v4
+      
+      - name: 🔐 Login to Azure Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY_URL }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+      
+      - name: 🛠️ Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: 🐳 Build and Push Nginx Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./nginx
+          file: ./nginx/Dockerfile
+          push: true
+          tags: |
+            ${{ env.NGINX_IMAGE }}:${{ github.sha }}
+            ${{ env.NGINX_IMAGE }}:latest
+          cache-from: type=registry,ref=${{ env.NGINX_IMAGE }}:latest
+          cache-to: type=inline
+      
+      - name: ✅ Nginx Image Built Successfully
+        run: |
+          echo "✓ Nginx image built and pushed:"
+          echo "  - ${{ env.NGINX_IMAGE }}:${{ github.sha }}"
+          echo "  - ${{ env.NGINX_IMAGE }}:latest"
+
+  # ========================================
+  # JOB 6: DEPLOY TO PRODUCTION
+  # ========================================
+  deploy-production:
+    name: 🚀 Deploy to Production
+    runs-on: ubuntu-latest
+    # Esperar a que todos los builds terminen
+    needs: [build-api, build-web, build-db, build-notifications, build-nginx]
+    # Solo si todos los builds tuvieron éxito O si no se ejecutaron (optional)
+    if: |
+      always() &&
+      (needs.build-api.result == 'success' || needs.build-api.result == 'skipped') &&
+      (needs.build-web.result == 'success' || needs.build-web.result == 'skipped') &&
+      (needs.build-db.result == 'success' || needs.build-db.result == 'skipped') &&
+      (needs.build-notifications.result == 'success' || needs.build-notifications.result == 'skipped') &&
+      (needs.build-nginx.result == 'success' || needs.build-nginx.result == 'skipped')
+    
+    steps:
+      - name: 📥 Checkout código
+        uses: actions/checkout@v4
+      
+      # Crear archivos .env y secrets localmente antes de transferir
+      - name: 📝 Crear archivos .env
+        run: |
+          # API .env
+          cat > api/.env << EOF
+          DB_HOST=db
+          DB_PORT=3306
+          DB_NAME=${{ env.MYSQL_DATABASE }}
+          DB_USER=${{ env.MYSQL_USER }}
+          DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+          FLASK_ENV=production
+          FLASK_DEBUG=false
+          FLASK_APP=app.py
+          SECRET_KEY=${{ secrets.FLASK_SECRET_KEY }}
+          HOST=0.0.0.0
+          PORT=5000
+          LOG_LEVEL=DEBUG
+          LOG_FORMAT=json
+          CORS_ORIGINS=http://localhost:3000,http://localhost:80,http://localhost
+          CORS_ALLOW_CREDENTIALS=true
+          NOTIFICATIONS_SERVICE_URL=http://notifications:8001
+          EOF
+          
+          # DB .env
+          cat > db/.env << EOF
+          MYSQL_DATABASE=${{ env.MYSQL_DATABASE }}
+          MYSQL_USER=${{ env.MYSQL_USER }}
+          MYSQL_ROOT_PASSWORD=${{ secrets.DB_ROOT_PASSWORD }}
+          MYSQL_PASSWORD=${{ secrets.DB_PASSWORD }}
+          MYSQL_TCP_PORT=3306
+          MYSQL_BIND_ADDRESS=0.0.0.0
+          MYSQL_INNODB_BUFFER_POOL_SIZE=256M
+          MYSQL_MAX_CONNECTIONS=100
+          MYSQL_CHARACTER_SET_SERVER=utf8mb4
+          MYSQL_COLLATION_SERVER=utf8mb4_unicode_ci
+          MYSQL_DEFAULT_TIME_ZONE=America/Argentina/Buenos_Aires
+          EOF
+          
+          # Notifications .env
+          cat > notifications/.env << EOF
+          SMTP_USERNAME=${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}
+          SMTP_SERVER=${{ env.SMTP_SERVER }}
+          SMTP_PORT=${{ env.SMTP_PORT }}
+          HOST=0.0.0.0
+          PORT=8001
+          EOF
+          
+          # Web .env
+          cat > web/.env << EOF
+          REACT_APP_API_URL=http://localhost:5000
+          REACT_APP_ENV=production
+          EOF
+          
+          # Nginx .env
+          cat > nginx/.env << EOF
+          NGINX_HOST=localhost
+          NGINX_PORT=80
+          NGINX_SSL_PORT=443
+          API_UPSTREAM=api:5000
+          WEB_UPSTREAM=web:3000
+          NOTIFICATIONS_UPSTREAM=notifications:8001
+          EOF
+          
+          echo "✓ Archivos .env creados"
+      
+      - name: 🔐 Crear archivos de secrets
+        run: |
+          mkdir -p secrets
+          echo "${{ secrets.DB_PASSWORD }}" > secrets/db_password.txt
+          echo "${{ secrets.DB_ROOT_PASSWORD }}" > secrets/db_root_password.txt
+          echo "${{ secrets.FLASK_SECRET_KEY }}" > secrets/flask_secret_key.txt
+          echo "${{ secrets.SMTP_USERNAME }}" > secrets/smtp_username.txt
+          echo "${{ secrets.SMTP_PASSWORD }}" > secrets/smtp_password.txt
+          chmod 644 secrets/*.txt
+          echo "✓ Archivos de secrets creados"
+      
+      # Actualizar docker-compose.yml con imágenes de ACR
+      - name: 🔄 Actualizar docker-compose.yml con imágenes de ACR
+        run: |
+          # Backup del original
+          cp docker-compose.yml docker-compose.yml.bak
+          
+          # Reemplazar registry en todas las imágenes
+          sed -i 's|registry-alumnos.labsis.frc.utn.edu.ar:8443/|miproyectoacr.azurecr.io/|g' docker-compose.yml
+          
+          echo "✓ docker-compose.yml actualizado con ACR registry"
+          echo "Imágenes actualizadas:"
+          grep "image: " docker-compose.yml
+      
+      # Deploy usando SSH con appleboy/ssh-action
+      - name: 🚀 Deploy via SSH to Production Server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: 22
+          script_stop: true               # Detener ejecución si hay error
+          script: |
+            echo "================================================"
+            echo "🚀 INICIANDO DEPLOY EN SERVIDOR DE PRODUCCIÓN"
+            echo "================================================"
+            
+            # Crear directorio de proyecto si no existe
+            mkdir -p ${{ env.PATH_SERVER_USR }}/trabajo-practico-grupo-01
+            cd ${{ env.PATH_SERVER_USR }}/trabajo-practico-grupo-01
+            
+            echo "📂 Directorio actual: $(pwd)"
+            
+            # Limpiar deployment anterior (mantener volúmenes)
+            echo "🧹 Limpiando deployment anterior..."
+            docker compose down --remove-orphans 2>/dev/null || true
+            docker volume rm trabajo-practico-grupo-01_nginx_ssl 2>/dev/null || true
+            
+            # Login a Azure Container Registry
+            echo "🔐 Login to Azure Container Registry..."
+            echo "${{ secrets.ACR_PASSWORD }}" | docker login miproyectoacr.azurecr.io \
+              -u "${{ secrets.ACR_USERNAME }}" --password-stdin
+            
+            # Pull de todas las imágenes desde ACR
+            echo "📥 Pulling images from ACR..."
+            docker pull miproyectoacr.azurecr.io/todos-api:latest
+            docker pull miproyectoacr.azurecr.io/todos-web:latest
+            docker pull miproyectoacr.azurecr.io/todos-db:latest
+            docker pull miproyectoacr.azurecr.io/todos-notifications:latest
+            docker pull miproyectoacr.azurecr.io/todos-nginx:latest
+            
+            echo "✓ Todas las imágenes descargadas desde ACR"
+      
+      # Transferir archivos necesarios al servidor
+      - name: 📤 Transfer files to Production Server
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: 22
+          source: "docker-compose.yml,api/.env,db/.env,notifications/.env,web/.env,nginx/.env,secrets/*"
+          target: "${{ env.PATH_SERVER_USR }}/trabajo-practico-grupo-01"
+          strip_components: 0
+      
+      # Iniciar servicios con docker compose
+      - name: 🐳 Start Docker Compose Services
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: 22
+          command_timeout: 10m            # Timeout extendido para generación de SSL
+          script: |
+            cd ${{ env.PATH_SERVER_USR }}/trabajo-practico-grupo-01
+            
+            echo "🚀 Iniciando servicios con docker compose..."
+            docker compose up -d
+            
+            echo "📊 Estado de contenedores:"
+            docker compose ps
+            
+            echo "⏳ Esperando a que MySQL esté listo..."
+            MAX_WAIT=60
+            ELAPSED=0
+            until docker exec todos-db mysqladmin ping -h localhost --silent 2>/dev/null; do
+              if [ $ELAPSED -ge $MAX_WAIT ]; then
+                echo "❌ ERROR: MySQL no respondió después de ${MAX_WAIT} segundos"
+                docker logs todos-db --tail=50
+                exit 1
+              fi
+              if [ $(($ELAPSED % 5)) -eq 0 ]; then
+                echo "  Esperando MySQL... (${ELAPSED}s/${MAX_WAIT}s)"
+              fi
+              sleep 2
+              ELAPSED=$((ELAPSED+2))
+            done
+            echo "✓ MySQL está listo"
+            
+            # Reiniciar API para conexión limpia
+            echo "🔄 Reiniciando API..."
+            docker compose restart api
+            sleep 5
+            
+            # Esperar a que Nginx genere certificados SSL (puede tomar tiempo)
+            echo "⏳ Esperando generación de certificados SSL y DH params..."
+            MAX_WAIT=300
+            ELAPSED=0
+            
+            while [ $ELAPSED -lt $MAX_WAIT ]; do
+              if docker logs todos-nginx 2>&1 | grep -q "✅ DH params generados exitosamente"; then
+                echo "✅ Nginx completó la generación de SSL en ${ELAPSED} segundos"
+                break
+              fi
+              
+              if docker logs todos-nginx 2>&1 | grep -q "nginx entered RUNNING state"; then
+                echo "✅ Nginx ya está en estado RUNNING"
+                break
+              fi
+              
+              if [ $(($ELAPSED % 15)) -eq 0 ] && [ $ELAPSED -gt 0 ]; then
+                echo "  ⏳ Generando SSL... (${ELAPSED}s/${MAX_WAIT}s)"
+              fi
+              
+              sleep 3
+              ELAPSED=$((ELAPSED + 3))
+            done
+            
+            echo "📊 Estado final de contenedores:"
+            docker compose ps
+            
+            echo "🏥 Health Check del gateway HTTPS..."
+            MAX_ATTEMPTS=20
+            ATTEMPT=0
+            until curl -s -k -f https://${{ secrets.DEPLOY_HOST }}:60143 > /dev/null 2>&1; do
+              ATTEMPT=$((ATTEMPT+1))
+              if [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
+                echo "❌ ERROR: Timeout esperando respuesta HTTPS"
+                docker logs todos-nginx --tail=50
+                exit 1
+              fi
+              if [ $(($ATTEMPT % 5)) -eq 0 ]; then
+                echo "  Intento $ATTEMPT/$MAX_ATTEMPTS..."
+              fi
+              sleep 3
+            done
+            
+            echo "✅ Gateway HTTPS respondió correctamente"
+            
+            # Probar endpoints
+            echo "🧪 Probando endpoints..."
+            curl -s -k -I https://${{ secrets.DEPLOY_HOST }}:60143 | head -n 5
+            curl -s -k https://${{ secrets.DEPLOY_HOST }}:60143/api/ || true
+            curl -s -k https://${{ secrets.DEPLOY_HOST }}:60143/api/todos || true
+            
+            echo "════════════════════════════════════════════════════════════"
+            echo "✅ DESPLIEGUE COMPLETADO EXITOSAMENTE"
+            echo "════════════════════════════════════════════════════════════"
+            echo "URLs de acceso:"
+            echo "  🌐 Frontend: https://${{ secrets.DEPLOY_HOST }}:60143"
+            echo "  🔧 API Root: https://${{ secrets.DEPLOY_HOST }}:60143/api/"
+            echo "  📝 Tareas:   https://${{ secrets.DEPLOY_HOST }}:60143/api/todos"
+            echo "════════════════════════════════════════════════════════════"
+      
+      # Cleanup de imágenes antiguas (mantener solo latest y current SHA)
+      - name: 🧹 Cleanup Old Docker Images
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: 22
+          script: |
+            echo "🧹 Limpiando imágenes Docker antiguas..."
+            
+            # Eliminar imágenes dangling (sin tag)
+            echo "Eliminando imágenes dangling..."
+            docker image prune -f
+            
+            # Eliminar imágenes antiguas del proyecto (mantener latest y SHA actual)
+            echo "Limpiando imágenes antiguas de ACR..."
+            
+            # Lista de servicios
+            SERVICES="todos-api todos-web todos-db todos-notifications todos-nginx"
+            
+            for SERVICE in $SERVICES; do
+              echo "Procesando $SERVICE..."
+              
+              # Obtener todas las imágenes del servicio excepto latest y SHA actual
+              OLD_IMAGES=$(docker images "miproyectoacr.azurecr.io/$SERVICE" \
+                --format "{{.Repository}}:{{.Tag}}" | \
+                grep -v ":latest" | \
+                grep -v ":${{ github.sha }}" || true)
+              
+              if [ -n "$OLD_IMAGES" ]; then
+                echo "  Eliminando imágenes antiguas de $SERVICE:"
+                echo "$OLD_IMAGES" | while read IMAGE; do
+                  echo "    - $IMAGE"
+                  docker rmi "$IMAGE" 2>/dev/null || true
+                done
+              else
+                echo "  ✓ No hay imágenes antiguas de $SERVICE"
+              fi
+            done
+            
+            # Mostrar espacio liberado
+            echo "📊 Uso de disco después de cleanup:"
+            docker system df
+            
+            echo "✓ Cleanup completado"
+
+  # ========================================
+  # JOB 7: VERIFY DEPLOYMENT
+  # ========================================
+  verify-deployment:
+    name: ✅ Verify Production Deployment
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: success()
+    
+    steps:
+      - name: 🔍 Verificar estado de servicios
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: 22
+          script: |
+            cd ${{ env.PATH_SERVER_USR }}/trabajo-practico-grupo-01
+            
+            echo "================================================"
+            echo "🔍 VERIFICACIÓN DE DEPLOYMENT"
+            echo "================================================"
+            
+            echo "📊 Estado de contenedores:"
+            docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            
+            echo ""
+            echo "💻 Uso de recursos:"
+            docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}"
+            
+            echo ""
+            echo "🏥 Health checks:"
+            docker inspect --format='{{.Name}} - {{.State.Health.Status}}' $(docker ps -q) 2>/dev/null || echo "No health checks configured"
+            
+            echo ""
+            echo "🔐 Información de certificados SSL:"
+            docker exec todos-nginx sh -c '
+              if [ -f "/etc/nginx/ssl/server.crt" ]; then
+                openssl x509 -in /etc/nginx/ssl/server.crt -noout -subject -dates
+                echo "✓ Certificado SSL encontrado"
+                ls -lh /etc/nginx/ssl/dhparam.pem 2>/dev/null && echo "✓ DH params encontrado" || echo "⚠ DH params no encontrado"
+              else
+                echo "⚠ No se encontró certificado SSL"
+              fi
+            ' || echo "⚠ No se pudo verificar certificados"
+            
+            echo ""
+            echo "📦 Imágenes en uso:"
+            docker compose images
+            
+            echo ""
+            echo "🌐 Logs recientes de Nginx:"
+            docker logs todos-nginx --tail=20 2>&1
+            
+            echo "================================================"
+            echo "✅ VERIFICACIÓN COMPLETADA"
+            echo "================================================"

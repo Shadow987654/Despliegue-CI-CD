@@ -23,9 +23,9 @@ env:
   REGISTRY_PASSWORD: ${{ secrets.ACR_PASSWORD }} # Password ACR (configurar en GitHub Secrets)
   
   # Servidor de producción
-  DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}        # IP del servidor (ej: 172.16.9.31)
-  DEPLOY_USER: ${{ secrets.DEPLOY_USER }}        # Usuario SSH (ej: docker-alumnos01)
-  DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}  # Clave privada SSH
+  VM_HOST: ${{ secrets.VM_HOST }}        # IP del servidor (ej: 172.16.9.31)
+  VM_USERNAME: ${{ secrets.VM_USERNAME }}        # Usuario SSH (ej: docker-alumnos01)
+  VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}  # Clave privada SSH
   
   # Nombres de imágenes Docker (ACR)
   API_IMAGE: miproyectoacr.azurecr.io/todos-api
@@ -39,7 +39,7 @@ env:
   
   # Variables de configuración
   DOCKER_NETWORK: app-network
-  PATH_SERVER_USR: devops-tp
+  PATH_SERVER_USR: /home/azureuser/app
   
   # Variables de aplicación (no sensibles)
   MYSQL_DATABASE: todos_db
@@ -386,11 +386,10 @@ jobs:
       - name: 🚀 Deploy via SSH to Production Server
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_KEY }}
           port: 22
-          script_stop: true               # Detener ejecución si hay error
           script: |
             echo "================================================"
             echo "🚀 INICIANDO DEPLOY EN SERVIDOR DE PRODUCCIÓN"
@@ -398,7 +397,7 @@ jobs:
             
             # Crear directorio de proyecto si no existe
             mkdir -p ${{ env.PATH_SERVER_USR }}/trabajo-practico-grupo-01
-            cd ${{ env.PATH_SERVER_USR }}/trabajo-practico-grupo-01
+            cd /home/azureuser/app
             
             echo "📂 Directorio actual: $(pwd)"
             
@@ -426,9 +425,9 @@ jobs:
       - name: 📤 Transfer files to Production Server
         uses: appleboy/scp-action@master
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_KEY }}
           port: 22
           source: "docker-compose.yml,api/.env,db/.env,notifications/.env,web/.env,nginx/.env,secrets/*"
           target: "${{ env.PATH_SERVER_USR }}/trabajo-practico-grupo-01"
@@ -438,9 +437,9 @@ jobs:
       - name: 🐳 Start Docker Compose Services
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_KEY }}
           port: 22
           command_timeout: 10m            # Timeout extendido para generación de SSL
           script: |
@@ -504,7 +503,7 @@ jobs:
             echo "🏥 Health Check del gateway HTTPS..."
             MAX_ATTEMPTS=20
             ATTEMPT=0
-            until curl -s -k -f https://${{ secrets.DEPLOY_HOST }}:60143 > /dev/null 2>&1; do
+            until curl -s -k -f https://${{ secrets.VM_HOST }}:60143 > /dev/null 2>&1; do
               ATTEMPT=$((ATTEMPT+1))
               if [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
                 echo "❌ ERROR: Timeout esperando respuesta HTTPS"
@@ -521,26 +520,26 @@ jobs:
             
             # Probar endpoints
             echo "🧪 Probando endpoints..."
-            curl -s -k -I https://${{ secrets.DEPLOY_HOST }}:60143 | head -n 5
-            curl -s -k https://${{ secrets.DEPLOY_HOST }}:60143/api/ || true
-            curl -s -k https://${{ secrets.DEPLOY_HOST }}:60143/api/todos || true
+            curl -s -k -I https://${{ secrets.VM_HOST }}:60143 | head -n 5
+            curl -s -k https://${{ secrets.VM_HOST }}:60143/api/ || true
+            curl -s -k https://${{ secrets.VM_HOST }}:60143/api/todos || true
             
             echo "════════════════════════════════════════════════════════════"
             echo "✅ DESPLIEGUE COMPLETADO EXITOSAMENTE"
             echo "════════════════════════════════════════════════════════════"
             echo "URLs de acceso:"
-            echo "  🌐 Frontend: https://${{ secrets.DEPLOY_HOST }}:60143"
-            echo "  🔧 API Root: https://${{ secrets.DEPLOY_HOST }}:60143/api/"
-            echo "  📝 Tareas:   https://${{ secrets.DEPLOY_HOST }}:60143/api/todos"
+            echo "  🌐 Frontend: https://${{ secrets.VM_HOST }}:60143"
+            echo "  🔧 API Root: https://${{ secrets.VM_HOST }}:60143/api/"
+            echo "  📝 Tareas:   https://${{ secrets.VM_HOST }}:60143/api/todos"
             echo "════════════════════════════════════════════════════════════"
       
       # Cleanup de imágenes antiguas (mantener solo latest y current SHA)
       - name: 🧹 Cleanup Old Docker Images
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_KEY }}
           port: 22
           script: |
             echo "🧹 Limpiando imágenes Docker antiguas..."
@@ -594,9 +593,9 @@ jobs:
       - name: 🔍 Verificar estado de servicios
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_KEY }}
           port: 22
           script: |
             cd ${{ env.PATH_SERVER_USR }}/trabajo-practico-grupo-01
